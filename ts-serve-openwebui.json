@@ -1,0 +1,19 @@
+{
+    "TCP": {
+        "443": {
+            "HTTPS": true
+        }
+    },
+    "Web": {
+        "openwebui.prokope.io:443": {
+            "Handlers": {
+                "/": {
+                    "Proxy": "http://openwebui:8080"
+                }
+            }
+        }
+    },
+    "AllowFunnel": {
+        "openwebui.prokope.io:443": false
+    }
+}
