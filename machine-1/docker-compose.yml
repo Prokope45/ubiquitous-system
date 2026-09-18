@@ -1,0 +1,317 @@
+services:
+  # MARK:- Openweb UI
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    networks:
+      - caddy-net
+    environment:
+      - WEBUI_URL=https://${OPEN_WEBUI_DOMAIN}
+      # OIDC Credentials
+      - OAUTH_CLIENT_ID=${OPEN_WEBUI_OAUTH_CLIENT_ID}
+      - OAUTH_CLIENT_SECRET=${OPEN_WEBUI_OAUTH_CLIENT_SECRET}
+      - OPENID_PROVIDER_URL=${OPEN_WEBUI_OAUTH_PROVIDER_URL}
+
+      # Provider Display Name
+      - OAUTH_PROVIDER_NAME=${OPEN_WEBUI_OAUTH_PROVIDER_NAME}
+
+      # Scopes
+      - OAUTH_SCOPES=openid email profile
+
+      # User Management
+      - ENABLE_OAUTH_SIGNUP=true
+      - OAUTH_MERGE_ACCOUNTS_BY_EMAIL=true
+
+      # Searxng
+      - SEARXNG_QUERY_URL=http://searxng:8080/search?q=&format=json
+    volumes:
+      - ./data/open-webui:/app/backend/data
+      - ~/Documents/Obsidian/Koios:/vault:ro
+    restart: unless-stopped
+
+  # MARK: Searxng
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    networks:
+      - caddy-net
+    volumes:
+      - ./data/searxng:/etc/searxng:rw
+    environment:
+      - SEARXNG_BASE_URL=${SEARXNG_BASE_URL}
+    restart: unless-stopped
+  
+  # MARK: Kokoro TTS
+  kokoro-tts:
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
+    container_name: kokoro-tts
+    networks:
+      - caddy-net
+    volumes:
+      - ./data/kokoro/voices/:/app/api/src/voices/v1_0
+    restart: unless-stopped
+
+  # MARK:- Gitea
+  gitea:
+    image: gitea/gitea:latest
+    container_name: gitea
+    networks:
+      - gitea-net
+      - caddy-net
+    environment:
+      - RUN_MODE=prod
+      - USER_UID=1000
+      - USER_GID=1000
+      - GITEA__server__HTTP_PORT=3000
+      - GITEA__server__ROOT_URL=https://${GITEA_DOMAIN}
+      - GITEA__server__SSH_DOMAIN=${GITEA_DOMAIN}
+      - GITEA__database__DB_TYPE=postgres
+      - GITEA__database__HOST=gitea-db:5432
+      - GITEA__database__NAME=gitea
+      - GITEA__database__USER=gitea
+      - GITEA__database__PASSWD=${GITEA_DB_PASSWORD}
+    volumes:
+      - ./data/gitea:/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: always
+
+  db:
+    image: postgres:16-alpine
+    container_name: gitea-db
+    environment:
+      POSTGRES_DB: gitea
+      POSTGRES_USER: gitea
+      POSTGRES_PASSWORD: ${GITEA_DB_PASSWORD}
+    networks:
+      - gitea-net
+    volumes:
+      - ./data/gitea/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "gitea"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # MARK:- PocketID
+  pocket-id:
+    image: ghcr.io/pocket-id/pocket-id:latest
+    container_name: pocket-id
+    restart: unless-stopped
+    environment:
+      - APP_URL=${APP_URL}
+      - TRUST_PROXY=true
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+    volumes:
+      - ./data/pocket-id:/app/data
+    networks:
+      - pocketid-net
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    restart: unless-stopped
+    command: tunnel run
+    environment:
+      - TUNNEL_TOKEN=${CLOUD_FLARED_API_KEY_POCKETID}
+    networks:
+      - pocketid-net
+
+  # MARK:- Tailscale
+  tailscale-caddy:
+    image: tailscale/tailscale:latest
+    container_name: tailscale-caddy
+    hostname: proxy-cloud
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      - TS_AUTH_ONCE=true
+      - TS_STATE_DIR=/var/lib/tailscale
+    volumes:
+      - ./data/tailscale-caddy:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - net_admin
+      - sys_module
+    networks:
+      - caddy-net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  # MARK: Reverse Proxy
+  caddy:
+    build:
+      context: .
+      dockerfile: Dockerfile.caddy
+    container_name: caddy
+    network_mode: service:tailscale-caddy
+    environment:
+      - CLOUDFLARE_API_TOKEN=${CLOUD_FLARE_API_KEY_CADDY}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./data/caddy:/data
+      - ./data/caddy-config:/config
+    depends_on:
+      - tailscale-caddy
+      - gitea
+      - immich-server
+      - open-webui
+      - searxng
+      - portainer
+      # - homeassistant
+    restart: unless-stopped
+
+  # MARK:- Immich
+  immich-server:
+    image: ghcr.io/immich-app/immich-server:${IMMICH_VERSION:-release}
+    container_name: immich-server
+    volumes:
+      - /mnt/d/Photos:/usr/src/app/external/pictures:ro
+      - /mnt/d/immich/upload:/usr/src/app/upload
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - DB_HOSTNAME=immich-db
+      - DB_USERNAME=immich
+      - DB_PASSWORD=${IMMICH_DB_PASSWORD}
+      - DB_DATABASE_NAME=immich
+      - REDIS_HOSTNAME=immich-redis
+    depends_on:
+      immich-db:
+        condition: service_healthy
+      immich-redis:
+        condition: service_started
+    networks:
+      - immich-net
+      - pocketid-net
+      - caddy-net
+    restart: unless-stopped
+
+  immich-machine-learning:
+    image: ghcr.io/immich-app/immich-machine-learning:release
+    container_name: immich-machine-learning
+    volumes:
+      - ./data/immich/model-cache:/cache
+    networks:
+      - immich-net
+    restart: unless-stopped
+
+  immich-redis:
+    image: redis:7-alpine
+    container_name: immich-redis
+    networks:
+      - immich-net
+    restart: unless-stopped
+
+  immich-db:
+    image: tensorchord/pgvecto-rs:pg16-v0.2.0
+    container_name: immich-db
+    environment:
+      POSTGRES_DB: immich
+      POSTGRES_USER: immich
+      POSTGRES_PASSWORD: ${IMMICH_DB_PASSWORD}
+      POSTGRES_INITDB_ARGS: '--data-checksums'
+    volumes:
+      - ./data/immich/postgres:/var/lib/postgresql/data
+    networks:
+      - immich-net
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "immich"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # MARK:- HomeAssistant
+  # homeassistant:
+  #   image: ghcr.io/home-assistant/home-assistant:stable
+  #   container_name: homeassistant
+  #   network_mode: host
+  #   environment:
+  #     - TZ=America/Chicago
+  #   # devices:
+  #     # - /dev/ttyUSB0:/dev/ttyUSB0
+  #   volumes:
+  #     - ./data/homeassistant:/config
+  #     - /etc/localtime:/etc/localtime:ro
+  #     - /run/dbus:/run/dbus:ro
+  #   restart: unless-stopped
+
+  # matter-server:
+  #   image: ghcr.io/home-assistant-libs/python-matter-server:stable
+  #   container_name: matter-server
+  #   network_mode: host
+  #   environment:
+  #     - TZ=America/Chicago
+  #   volumes:
+  #     - ./data/matter:/data
+  #     - /run/dbus:/run/debus:ro
+  #   restart:
+  #     unless-stopped
+
+
+# MARK:- Plex
+  # LAN-only, deliberately not on caddy-net -- doesn't need Tailscale/Caddy.
+  plex:
+    image: lscr.io/linuxserver/plex:latest
+    container_name: plex
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/Chicago
+      # Only needed on first run to link this server to your Plex account --
+      # get a fresh one from https://plex.tv/claim (expires in ~4 minutes),
+      # then remove this line once the server shows up as claimed.
+      - PLEX_CLAIM=${PLEX_CLAIM_TOKEN}
+      - ADVERTISE_IP=${ADVERTISE_IP}
+      - VERSION=docker
+    ports:
+      - "32400:32400/tcp"
+      - "32410:32410/udp"
+      - "32412:32412/udp"
+      - "32413:32413/udp"
+      - "32414:32414/udp"
+      - "32469:32469/tcp"
+      - "1900:1900/udp"
+    volumes:
+      - ./data/plex/config:/config
+      - ${PLEX_MOVIES_PATH}:/data/movies:ro
+    restart: unless-stopped
+    # Uncomment if the Cloud machine has an NVIDIA GPU and you want
+    # hardware-accelerated transcoding (requires Plex Pass to activate):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # MARK:- Portainer
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: portainer
+    networks:
+      - caddy-net
+    environment:
+      # Shared secret the Portainer Server must present when connecting --
+      # without this, anyone who can reach the tailnet IP on 9001 could
+      # attach as if they were the trusted server.
+      - AGENT_SECRET=${PORTAINER_AGENT_SECRET}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data/portainer:/data
+    restart: unless-stopped
+
+networks:
+  gitea-net:
+    driver: bridge
+  caddy-net:
+    driver: bridge
+  pocketid-net:
+    driver: bridge
+  immich-net:
+    driver: bridge

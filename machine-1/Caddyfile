@@ -1,0 +1,27 @@
+{
+    acme_dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+}
+
+openwebui.prokope.io {
+    reverse_proxy open-webui:8080
+}
+
+immich.prokope.io {
+    reverse_proxy immich-server:2283
+}
+
+gitea.prokope.io {
+    reverse_proxy gitea:3000
+}
+
+search.prokope.io {
+    reverse_proxy searxng:8080
+}
+
+portainer.prokope.io {
+	reverse_proxy https://portainer:9443 {
+		transport http {
+			tls_insecure_skip_verify
+		}
+	}
+}

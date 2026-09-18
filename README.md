@@ -171,6 +171,15 @@ Client Secret: <from Pocket ID>
 Auto Register: enabled
 ```
 
+
+#### Mounting External Drives for Immich
+
+To use an external SSD as the D: drive, you have to mount it as a drive to the WSL instance:
+
+`sudo mount -t drvfs D: /mnt/d`
+
+This is not permanent since the drive can be disconnected, so if you see `Error response from daemon: stating /mnt/d/Photos: stat /mnt/d/Photos: no such device` during container build this is the fix for it.
+
 ### Home Assistant
 
 Home Assistant runs with `network_mode: host` so that it can broadcast mDNS on the local network for HomeKit device discovery. The web UI is proxied through Caddy via the host's Docker bridge gateway IP.

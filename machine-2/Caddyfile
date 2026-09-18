@@ -1,3 +1,7 @@
+{
+    acme_dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+}
+
 ollama.prokope.io {
 	# Ollama validates the Host header and 403s anything that isn't
     # localhost/127.0.0.1, as DNS-rebinding protection. Caddy forwards the
@@ -7,14 +11,8 @@ ollama.prokope.io {
     reverse_proxy localhost:11434 {
         header_up Host localhost
     }
-    tls {
-		  dns cloudflare {env.CLOUDFLARE_API_TOKEN}
-	}
 }
 
 hermes.prokope.io {
 	reverse_proxy localhost:8642
-	tls {
-		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
-	}
 }
