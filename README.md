@@ -30,6 +30,8 @@ Tailnet members
               └── 172.17.0.1:8123  (Home Assistant on host network)
 ```
 
+![](./self-hosted-diagram.drawio.png)
+
 ## Prerequisites
 
 - Docker + Docker Compose

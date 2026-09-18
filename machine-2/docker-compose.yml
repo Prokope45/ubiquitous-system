@@ -1,0 +1,127 @@
+services:
+  # MARK: Ollama
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    network_mode: service:tailscale-caddy
+    volumes:
+      - ./data/ollama:/root/.ollama
+    environment:
+      - OLLAMA_HOST=127.0.0.1
+      - OLLAMA_ORIGINS=*,moz-extension://*,chrome-extension://*,safari-web-extension://*
+      # --- Tuning for larger models (9B+) ---
+      # Keep only 1 model resident at a time so its full weight+context fits
+      # in VRAM rather than splitting capacity across multiple loaded models.
+      - OLLAMA_MAX_LOADED_MODELS=1
+      # Serialize requests instead of running several generations in
+      # parallel, which would otherwise multiply memory usage per request.
+      - OLLAMA_NUM_PARALLEL=1
+      # Reduces KV-cache memory footprint, helpful for longer contexts on
+      # larger models. Safe to leave on for modern NVIDIA GPUs.
+      - OLLAMA_FLASH_ATTENTION=1
+      # How long to keep a model loaded in (V)RAM after the last request.
+      - OLLAMA_KEEP_ALIVE=30m
+    depends_on:
+      - tailscale-caddy
+    restart: unless-stopped
+    # Uncomment to give Ollama access to an NVIDIA GPU:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # MARK: Tailscale & Caddy
+  tailscale-caddy:
+    image: tailscale/tailscale:latest
+    container_name: tailscale-caddy
+    hostname: proxy-ollama
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      - TS_AUTH_ONCE=true
+      - TS_STATE_DIR=/var/lib/tailscale
+    volumes:
+      - ./data/tailscale-caddy:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - net_admin
+      - sys_module
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  caddy:
+    build:
+      context: .
+      dockerfile: ../Dockerfile.caddy
+    container_name: caddy
+    network_mode: service:tailscale-caddy
+    environment:
+      - CLOUDFLARE_API_TOKEN=${CLOUD_FLARE_API_KEY_CADDY}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./data/caddy:/data
+      - ./data/caddy-config:/config
+    depends_on:
+      - tailscale-caddy
+      - ollama
+      - hermes
+    restart: unless-stopped
+
+  # MARK: Hermes Agent
+  hermes:
+    image: nousresearch/hermes-agent:latest
+    container_name: hermes
+    # Shares tailscale-caddy's network namespace, same as ollama and caddy,
+    # so Caddy can reach it at localhost:8642 for the hermes.prokope.io proxy.
+    network_mode: service:tailscale-caddy
+    command: gateway run
+    shm_size: 1g
+    environment:
+      - HERMES_DASHBOARD=0
+      # Exposes the OpenAI-compatible API server that Open WebUI connects to.
+      - API_SERVER_ENABLED=true
+      - API_SERVER_HOST=127.0.0.1
+      - API_SERVER_KEY=${HERMES_API_SERVER_KEY}
+      - OBSIDIAN_VAULT_PATH=/opt/data/koios-vault
+      - SEARXNG_URL=https://search.prokope.io
+    volumes:
+      # Persistent Hermes state: config, sessions, memories, skills
+      - hermes-data:/opt/data
+      # Direct access to your existing local vault clone -- same directory
+      # Open WebUI already bind-mounts on the Cloud machine. Read-write,
+      # since Hermes writes notes back into it.
+      - /mnt/c/Users/Prokope/Documents/Obsidian/Koios:/opt/data/koios-vault
+    depends_on:
+      - tailscale-caddy
+      - ollama
+    restart: unless-stopped
+
+    # -------------------------- Portainer Agent ---------------------------
+  # Lets the Portainer Server running on the Cloud machine manage this
+  # machine's containers too. No published ports needed -- sharing
+  # tailscale-caddy's netns makes it reachable at proxy-ollama:9001 over
+  # the tailnet directly, same as everything else here.
+  portainer-agent:
+    image: portainer/agent:latest
+    container_name: portainer-agent
+    network_mode: service:tailscale-caddy
+    environment:
+      # Shared secret the Portainer Server must present when connecting --
+      # without this, anyone who can reach the tailnet IP on 9001 could
+      # attach as if they were the trusted server.
+      - AGENT_SECRET=${PORTAINER_AGENT_SECRET}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Enables Portainer's volume browser. May not fully work under
+      # Docker Desktop's WSL2 translation layer, but core container/stack
+      # management works regardless.
+      - /var/lib/docker/volumes:/var/lib/docker/volumes
+    depends_on:
+      - tailscale-caddy
+    restart: unless-stopped
+
+volumes:
+  hermes-data:
