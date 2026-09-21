@@ -8,9 +8,7 @@ ollama.prokope.io {
     # original Host (ollama.prokope.io) by default, which trips that check --
     # rewrite it to what Ollama actually expects.
 
-    reverse_proxy localhost:11434 {
-        header_up Host localhost
-    }
+    reverse_proxy localhost:8080
 }
 
 hermes.prokope.io {

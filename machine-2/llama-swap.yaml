@@ -1,0 +1,39 @@
+healthCheckTimeout: 300
+logLevel: info
+
+models:
+  ornith-9b:
+    name: "Ornith 1.5 9B"
+    cmd: |
+      /usr/local/bin/llama-server
+      -hf
+      ornith-ai/Ornith-1.5-9B-GGUF:Q4_K_M
+      --port ${PORT}
+      --host 0.0.0.0
+      --jinja
+      --ctx-size 65000
+      --n-gpu-layers 99
+      --flash-attn 'on'
+      --cache-type-k q8_0
+      --cache-type-v q8_0
+    ttl: 300
+
+  ornith-35b-a3b:
+    name: "Ornith 1.5 35B-A3B (MoE)"
+    cmd: |
+      /usr/local/bin/llama-server
+      -hf
+      AtomicChat/Ornith-1.5-35B-A3B-GGUF:IQ2_S
+      --port ${PORT}
+      --host 0.0.0.0
+      --jinja
+      --cpu-moe
+      --n-gpu-layers 99
+      --ctx-size 8192
+      --flash-attn 'on'
+      --cache-type-k q8_0
+      --cache-type-v q8_0
+      --temp 0.6
+      --top-p 0.95
+      --top-k 20
+    ttl: 300
